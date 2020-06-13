@@ -4,8 +4,11 @@ Digital signature
 路径只能有ascii字符，参数只能是ascii字符，因为c语言处理字符有点麻烦所以这里限制了只支持ascii字符
 文件不能大于2G
 
-gcc test.c -o disi && disi --sign example.txt rsa_private.pem example.sign
+gcc -std=c11 test.c -o disi && disi --sign example.txt rsa_private.pem example.sign
+gcc -std=c11 test.c -o disi && disi --check example.txt rsa_public.pem example.sign
 
+编译
+gcc -std=c11 test.c -o disi
 生成数字签名
 disi --sign example.txt rsa_private.pem example.sign
 验证数字签名
@@ -20,9 +23,12 @@ openssl rsa -in rsa_private.pem -pubout -out rsa_public.pem
 使用openssl输出example.txt的数字摘要
 openssl dgst -md5 example.txt
 使用openssl对example.txt生成数字签名
-openssl dgst -md5 -sign rsa_private.pem -out example.sign example.txt
+openssl dgst -md5 -sign rsa_private.pem -out example-openssl.sign example.txt
 使用openssl验证example.txt的数字签名
-openssl dgst -prverify rsa_private.pem -md5 -signature example.sign example.txt
+openssl dgst -prverify rsa_private.pem -md5 -signature example-openssl.sign example.txt
+
+比较使用openssl生成的数字签名和本程序生成的数字签名
+cmp example-openssl.sign example.sign
 */
 
 #include <stdio.h>
@@ -69,11 +75,11 @@ uString fileFath = {
     .str = NULL,
     .len = 0
 };
-uString Privatekey = {
+uString privatekey = {
     .str = NULL,
     .len = 0
 };
-uString PublicKey = {
+uString publicKey = {
     .str = NULL,
     .len = 0
 };
@@ -87,7 +93,7 @@ uString inSignaturePath = {
 };
 
 int mode; // 程序运行的模式，1是签名，2是验证签名
-char *help = "Please Input correct parameters\n--sign FilePath Privatekey outSignaturePath\n--check FilePath PublicKey inSignaturePath\n";
+char *help = "Please Input correct parameters\n--sign FilePath privatekey outSignaturePath\n--check FilePath publicKey inSignaturePath\n";
 
 void isFileExists(uString *tag);
 void isFileExists(uString *tag)
@@ -104,10 +110,10 @@ void printtest()
     printf("mode:\t%d\n", mode);
     printf("fileFath:\t");
     printuString(&fileFath);
-    printf("Privatekey:\t");
-    printuString(&Privatekey);
-    printf("PublicKey:\t");
-    printuString(&PublicKey);
+    printf("privatekey:\t");
+    printuString(&privatekey);
+    printf("publicKey:\t");
+    printuString(&publicKey);
     printf("outSignaturePath:\t");
     printuString(&outSignaturePath);
     printf("inSignaturePath:\t");
@@ -116,6 +122,42 @@ void printtest()
 
 void sign(char *md5Str);
 
+void dump(void * p, int length);
+
+char* getKeyContent(char *filePath, int *fileSize);
+char* getKeyContent(char *filePath, int *fileSize)
+{
+    FILE *fp, *fq;
+    // fopen_s(&fp, fileFath.str, "r");
+    fp = fopen(filePath, "r");
+
+    if (!fp) {
+        printf("Can not open this file!\n");
+    }
+
+    fseek(fp, 0, SEEK_END); // 文件指针转到文件末尾
+    *fileSize = ftell(fp);
+    if (*fileSize == -1) {
+        printf("Sorry! Can not calculate files which larger than 2 G B!\n"); // ftell函数返回long,最大为2GB,超出返回-1
+        fclose(fp);
+        exit(1);
+    }
+    rewind(fp); // 文件指针复位到文件头
+
+    char *keyContent;
+    printf("size %d\n", *fileSize);
+    keyContent = (char*)malloc(sizeof(char)*(*fileSize));
+    memset(keyContent, 0, *fileSize);
+    // fgets(keyContent, *fileSize, fp);
+    // fread(keyContent, sizeof(char), *fileSize, fp);
+    
+    char txt[1024];
+	while ((fgets(txt, 1024, fp)) != NULL) {
+		strcat(keyContent, txt);
+	}
+
+    return keyContent;
+}
 
 void check();
 void check()
@@ -158,9 +200,8 @@ typedef struct
 {
     unsigned int count[2];
     unsigned int state[4];
-    unsigned char buffer[64];   
+    unsigned char buffer[64];
 } MD5_CTX;
-
 
 #define F(x,y,z) ((x & y) | (~x & z))
 #define G(x,y,z) ((x & z) | (y & ~z))
@@ -191,7 +232,7 @@ typedef struct
     a += I(b,c,d) + x + ac; \
     a = ROTATE_LEFT(a,s); \
     a += b; \
-}                                            
+}
 void MD5Init(MD5_CTX *context);
 void MD5Update(MD5_CTX *context, unsigned char *input, unsigned int inputlen);
 void MD5Final(MD5_CTX *context, unsigned char digest[16]);
@@ -243,8 +284,8 @@ void MD5Update(MD5_CTX *context, unsigned char *input, unsigned int inputlen)
         for(i = partlen; i+64 <= inputlen; i+=64)
             MD5Transform(context->state, &input[i]);
 
-        index = 0;        
-    }  
+        index = 0;
+    }
     else
     {
         i = 0;
@@ -272,7 +313,7 @@ void MD5Encode(unsigned char *output,unsigned int *input,unsigned int len)
 
     while(j < len)
     {
-        output[j] = input[i] & 0xFF;  
+        output[j] = input[i] & 0xFF;
         output[j+1] = (input[i] >> 8) & 0xFF;
         output[j+2] = (input[i] >> 16) & 0xFF;
         output[j+3] = (input[i] >> 24) & 0xFF;
@@ -293,7 +334,7 @@ void MD5Decode(unsigned int *output, unsigned char *input, unsigned int len)
             (input[j+2] << 16) |
             (input[j+3] << 24);
         i++;
-        j += 4; 
+        j += 4;
     }
 }
 
@@ -427,10 +468,10 @@ void MD5File(char *filePath, char *md5Str)
     rewind(fp); // 文件指针复位到文件头
     // printf("size %d\n", fileSize);
     data = (char*)malloc(sizeof(char)*fileSize);
-    fread(data, 1, fileSize, fp);
-
+    fread(data, sizeof(char), fileSize, fp);
+    // dump(data, fileSize);
     MD5Update(&context, data, fileSize);
-// printf("%d\n", __LINE__);
+    // printf("%d\n", __LINE__);
     fclose(fp);
     free(data);
 
@@ -455,18 +496,19 @@ int main(int argc, char *argv[])
 
     if (strcmp("--sign", argv[1]) == 0) {
         mode = 1;
-        copyCharToString(argv[3], &Privatekey);
-        isFileExists(&Privatekey);
+        copyCharToString(argv[3], &privatekey);
+        isFileExists(&privatekey);
         copyCharToString(argv[4], &outSignaturePath);
+        printtest();
         char md5Str[MD5_STR_LEN + 1];
         sign(md5Str);
-        
+
 
 
     } else if (strcmp("--check", argv[1]) == 0) {
         mode = 2;
-        copyCharToString(argv[3], &PublicKey);
-        isFileExists(&PublicKey);
+        copyCharToString(argv[3], &publicKey);
+        isFileExists(&publicKey);
         copyCharToString(argv[4], &inSignaturePath);
         isFileExists(&inSignaturePath);
         check();
@@ -499,4 +541,27 @@ void sign(char *md5Str)
     char md5str2[MD5_STR_LEN + 1];
     MD5String(tt, strlen(tt), md5str2);
     printf("%s\n", md5str2);
+
+
+    char *privatekeyValue = NULL;
+    int fileSize;
+    // getKeyContent(privatekey.str, privatekeyValue);
+    privatekeyValue = getKeyContent(privatekey.str, &fileSize);
+    printf("%d\n", __LINE__);
+    // dump(privatekeyValue, fileSize);
+    printf("%s", privatekeyValue);
+    // for (int i = 0; i < fileSize; i++) {
+    //     printf("%c", privatekeyValue[i]);
+    // }
+    printf("\n%s\n", "test\nqwe");
+    printf("%d\n", __LINE__);
+
+
+    char *publickeyValue = NULL;
+    // int fileSize;
+    // getKeyContent(privatekey.str, privatekeyValue);
+    publickeyValue = getKeyContent("rsa_public.pem", &fileSize);
+    printf("%d\n", __LINE__);
+    // dump(publickeyValue, fileSize);
+    printf("\n%s\n", publickeyValue);
 }
