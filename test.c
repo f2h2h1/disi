@@ -92,7 +92,7 @@ char *help = "Please Input correct parameters\n--sign FilePath Privatekey outSig
 void isFileExists(uString *tag);
 void isFileExists(uString *tag)
 {
-    if (_access(tag->str, F_OK) != 0) {
+    if (_access(tag->str, 0) != 0) {
         printf("%s not exists.\n", tag->str);
         exit(DISI_FILE_NOT_EXISTS);
     }
@@ -198,6 +198,8 @@ void MD5Final(MD5_CTX *context, unsigned char digest[16]);
 void MD5Transform(unsigned int state[4], unsigned char block[64]);
 void MD5Encode(unsigned char *output, unsigned int *input, unsigned int len);
 void MD5Decode(unsigned int *output, unsigned char *input, unsigned int len);
+void MD5String(char *src, int len, char *md5Str);
+void MD5File(char *filePath, char *md5Str);
 
 #endif
 
@@ -381,6 +383,64 @@ void MD5Transform(unsigned int state[4], unsigned char block[64])
     state[3] += d;
 }
 
+void MD5String(char *src, int len, char *md5Str)
+{
+    unsigned char digest[16] = {0};
+    MD5_CTX context;
+    int i = 0;
+
+    MD5Init(&context);
+    MD5Update(&context, src, len);
+
+    MD5Final(&context, digest);
+
+    for(i = 0; i < 16; i++) {
+        snprintf(md5Str + i*2, 2+1, "%02x", digest[i]);
+    }
+}
+
+void MD5File(char *filePath, char *md5Str)
+{
+    unsigned char digest[16] = {0};
+    MD5_CTX context;
+    int i = 0;
+
+    /* 计算文件MD5 */
+    FILE *fp;
+    // fopen_s(&fp, fileFath.str, "rb"); // 以二进制打开文件
+    fp = fopen(filePath, "rb");
+    char *data = NULL;
+
+    if (!fp) {
+        printf("Can not open this file!\n");
+    }
+    MD5Init(&context);
+
+    fseek(fp, 0, SEEK_END); // 文件指针转到文件末尾
+    long fileSize = ftell(fp);
+    if (fileSize == -1) {
+        printf("Sorry! Can not calculate files which larger than 2 GB!\n"); // ftell函数返回long,最大为2GB,超出返回-1
+        fclose(fp);
+        exit(1);
+    }
+
+    rewind(fp); // 文件指针复位到文件头
+    // printf("size %d\n", fileSize);
+    data = (char*)malloc(sizeof(char)*fileSize);
+    fread(data, 1, fileSize, fp);
+
+    MD5Update(&context, data, fileSize);
+// printf("%d\n", __LINE__);
+    fclose(fp);
+    free(data);
+
+    MD5Final(&context, digest);
+
+    for(i = 0; i < 16; i++) {
+        snprintf(md5Str + i*2, 2+1, "%02x", digest[i]);
+    }
+}
+
 /* md5相关的实现 */
 
 int main(int argc, char *argv[])
@@ -430,47 +490,13 @@ int main(int argc, char *argv[])
 
 void sign(char *md5Str)
 {
-    // struct stat st;
-    unsigned char digest[16] = {0};
-    MD5_CTX context;
-    int i = 0;
-
-    /* 计算文件MD5 */
-    FILE *fp;
-    // fopen_s(&fp, fileFath.str, "rb"); // 以二进制打开文件
-    fp = fopen(fileFath.str, "rb"); 
-    char *data = NULL;
-    int ret = 0;
-
-    if (!fp) {
-        printf("Can not open this file!\n");    //以二进制打开文件
-    }
-    MD5Init(&context);
-
-    fseek(fp, 0, SEEK_END); // 文件指针转到文件末尾
-    long fileSize = ftell(fp);
-    if (fileSize == -1) {
-        printf("Sorry! Can not calculate files which larger than 2 GB!\n"); // ftell函数返回long,最大为2GB,超出返回-1
-        fclose(fp);
-        exit(1);
-    }
-
-    rewind(fp); // 文件指针复位到文件头
-    // printf("size %d\n", fileSize);
-    data = (char*)malloc(sizeof(char)*fileSize);
-    fread(data, 1, fileSize, fp);
-
-    MD5Update(&context, data, fileSize);
-// printf("%d\n", __LINE__);
-    fclose(fp);
-    free(data);
-
-    MD5Final(&context, digest);
+    MD5File(fileFath.str, md5Str);
 
     printf("MD5(%s)= ", fileFath.str);
-    for(i = 0; i < 16; i++) {
-        printf("%02x", digest[i]);
-        snprintf(md5Str + i*2, 2+1, "%02x", digest[i]);
-    }
-    printf("\n");
+    printf("%s\n", md5Str);
+
+    char *tt = "123456";
+    char md5str2[MD5_STR_LEN + 1];
+    MD5String(tt, strlen(tt), md5str2);
+    printf("%s\n", md5str2);
 }
