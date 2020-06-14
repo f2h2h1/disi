@@ -127,9 +127,13 @@ void dump(void * p, int length);
 char* getKeyContent(char *filePath, int *fileSize);
 char* getKeyContent(char *filePath, int *fileSize)
 {
-    FILE *fp, *fq;
-    // fopen_s(&fp, fileFath.str, "r");
-    fp = fopen(filePath, "r");
+    FILE *fp;
+
+    #ifdef _MSC_VER
+        fopen_s(&fp, fileFath.str, "r");
+    #else
+        fp = fopen(filePath, "r");
+    #endif
 
     if (!fp) {
         printf("Can not open this file!\n");
@@ -448,8 +452,13 @@ void MD5File(char *filePath, char *md5Str)
 
     /* 计算文件MD5 */
     FILE *fp;
-    // fopen_s(&fp, fileFath.str, "rb"); // 以二进制打开文件
-    fp = fopen(filePath, "rb");
+
+    #ifdef _MSC_VER
+        fopen_s(&fp, fileFath.str, "rb");
+    #else
+        fp = fopen(filePath, "rb");
+    #endif
+
     char *data = NULL;
 
     if (!fp) {
@@ -483,6 +492,149 @@ void MD5File(char *filePath, char *md5Str)
 }
 
 /* md5相关的实现 */
+
+/* base64相关的实现 */
+
+#define B64_EOLN                0xF0
+#define B64_CR                  0xF1
+#define B64_EOF                 0xF2
+#define B64_WS                  0xE0
+#define B64_ERROR               0xFF
+#define B64_NOT_BASE64(a)       (((a)|0x13) == 0xF3)
+#define B64_BASE64(a)           (!B64_NOT_BASE64(a))
+
+static const unsigned char data_ascii2bin[128] = {
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xE0, 0xF0, 0xFF, 0xFF, 0xF1, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xE0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0xFF, 0xFF, 0x3E, 0xFF, 0xF2, 0xFF, 0x3F,
+    0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x3A, 0x3B,
+    0x3C, 0x3D, 0xFF, 0xFF, 0xFF, 0x00, 0xFF, 0xFF,
+    0xFF, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+    0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
+    0x0F, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+    0x17, 0x18, 0x19, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+    0xFF, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F, 0x20,
+    0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+    0x29, 0x2A, 0x2B, 0x2C, 0x2D, 0x2E, 0x2F, 0x30,
+    0x31, 0x32, 0x33, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+};
+
+#ifndef CHARSET_EBCDIC
+static unsigned char conv_ascii2bin(unsigned char a, const unsigned char *table)
+{
+    if (a & 0x80)
+        return B64_ERROR;
+    return table[a];
+}
+#else
+static unsigned char conv_ascii2bin(unsigned char a, const unsigned char *table)
+{
+    a = os_toascii[a];
+    if (a & 0x80)
+        return B64_ERROR;
+    return table[a];
+}
+#endif
+
+static int evp_decodeblock_int(unsigned char *t,
+                               const unsigned char *f, int n)
+{
+    int i, ret = 0, a, b, c, d;
+    unsigned long l;
+    const unsigned char *table;
+
+
+        table = data_ascii2bin;
+
+    /* trim white space from the start of the line. */
+    while ((conv_ascii2bin(*f, table) == B64_WS) && (n > 0)) {
+        f++;
+        n--;
+    }
+
+    /*
+     * strip off stuff at the end of the line ascii2bin values B64_WS,
+     * B64_EOLN, B64_EOLN and B64_EOF
+     */
+    while ((n > 3) && (B64_NOT_BASE64(conv_ascii2bin(f[n - 1], table))))
+        n--;
+
+    if (n % 4 != 0) {
+        printf("error:%d\n", __LINE__);
+        return -1;
+    }
+
+    for (i = 0; i < n; i += 4) {
+        a = conv_ascii2bin(*(f++), table);
+        b = conv_ascii2bin(*(f++), table);
+        c = conv_ascii2bin(*(f++), table);
+        d = conv_ascii2bin(*(f++), table);
+        if ((a & 0x80) || (b & 0x80) || (c & 0x80) || (d & 0x80)) {
+            printf("error:%d %d\n", __LINE__, i);
+            return -1;
+        }
+        l = ((((unsigned long)a) << 18L) |
+             (((unsigned long)b) << 12L) |
+             (((unsigned long)c) << 6L) | (((unsigned long)d)));
+        *(t++) = (unsigned char)(l >> 16L) & 0xff;
+        *(t++) = (unsigned char)(l >> 8L) & 0xff;
+        *(t++) = (unsigned char)(l) & 0xff;
+        ret += 3;
+    }
+    return ret;
+}
+
+int EVP_DecodeBlock(unsigned char *t, const unsigned char *f, int n)
+{
+    return evp_decodeblock_int(t, f, n);
+}
+
+static int ct_base64_decode(const char *in, unsigned char **out)
+{
+    size_t inlen = strlen(in);
+    int outlen, i;
+    unsigned char *outbuf = NULL;
+
+    if (inlen == 0) {
+        *out = NULL;
+        return 0;
+    }
+
+    outlen = (inlen / 4) * 3;
+    outbuf = (char*)malloc(outlen);
+    if (outbuf == NULL) {
+        // CTerr(CT_F_CT_BASE64_DECODE, ERR_R_MALLOC_FAILURE);
+        goto err;
+    }
+
+    outlen = EVP_DecodeBlock(outbuf, (unsigned char *)in, inlen);
+    if (outlen < 0) {
+        // CTerr(CT_F_CT_BASE64_DECODE, CT_R_BASE64_DECODE_ERROR);
+        printf("error:%d\n", __LINE__);
+        goto err;
+    }
+
+    /* Subtract padding bytes from |outlen|.  Any more than 2 is malformed. */
+    i = 0;
+    while (in[--inlen] == '=') {
+        --outlen;
+        if (++i > 2) {
+            printf("error:%d\n", __LINE__);
+            goto err;
+        }
+    }
+
+    *out = outbuf;
+    return outlen;
+err:
+    // OPENSSL_free(outbuf);
+    return -1;
+}
+
+/* base64相关的实现 */
 
 int main(int argc, char *argv[])
 {
@@ -530,6 +682,24 @@ int main(int argc, char *argv[])
     return 0;
 }
 
+void loadKey(char* key, char tag[], int mode)
+{
+    char temptag[2048] = {'\0'};
+    if (mode == 1) {
+        sscanf(key, "-----BEGIN RSA PRIVATE KEY-----\n%[a-zA-Z0-9+/=\n]\n-----END RSA PRIVATE KEY-----", temptag);
+    } else {
+        sscanf(key, "-----BEGIN RSA PRIVATE KEY-----\n%[a-zA-Z0-9+/=\n]\n-----END RSA PRIVATE KEY-----", temptag);
+    }
+    for (int i = 0, j = 0; temptag[i] != '\0'; i++) {
+        if (temptag[i] == '\n') {
+            i++;
+            continue;
+        }
+        tag[j] = temptag[i];
+        j++;
+    }
+}
+
 void sign(char *md5Str)
 {
     MD5File(fileFath.str, md5Str);
@@ -553,6 +723,20 @@ void sign(char *md5Str)
     // for (int i = 0; i < fileSize; i++) {
     //     printf("%c", privatekeyValue[i]);
     // }
+
+    char privateBase64[2048] = {'\0'};
+    loadKey(privatekeyValue, privateBase64, 1);
+    printf("\n%s\n", privateBase64);
+
+    unsigned char* privateBin;
+    int privateBinLen = ct_base64_decode(privateBase64, &privateBin);
+    printf("privateBinLen=%d\n", privateBinLen);
+    // dump(privateBin, privateBinLen);
+
+    // FILE *fp = fopen("base64bin2", "wb");
+    // fwrite(privateBin, sizeof(unsigned char), privateBinLen, fp);
+    // fclose(fp);
+
     printf("\n%s\n", "test\nqwe");
     printf("%d\n", __LINE__);
 
@@ -564,4 +748,15 @@ void sign(char *md5Str)
     printf("%d\n", __LINE__);
     // dump(publickeyValue, fileSize);
     printf("\n%s\n", publickeyValue);
+
+    char in[] = "YTQ1cmJjZA==";
+    unsigned char *out;
+    ct_base64_decode(in, &out);
+
+    printf("in: %s\n", in);
+    printf("out: %s\n", out);
+
+
+
+
 }
